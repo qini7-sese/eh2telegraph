@@ -1,0 +1,27 @@
+base:
+  bot_token: xxx:xxxx
+  admins:
+    - 0
+  telegraph:
+    tokens:
+      - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    author_name: Test Name
+    author_url: https://github.com/qini7-sese/eh2telegraph
+
+proxy:
+  endpoint: https://proxy.xxx.workers.dev/
+  authorization: xxx
+
+http:
+  ipv6_prefix:
+
+exhentai:
+  ipb_pass_hash: xxx
+  ipb_member_id: xxx
+  igneous: xxx
+
+worker_kv:
+  endpoint: https://kv.xxx.workers.dev
+  token: xxx
+  cache_size: 10240
+  expire_sec: 5184000 # 60 days

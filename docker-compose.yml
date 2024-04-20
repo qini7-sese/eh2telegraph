@@ -1,0 +1,14 @@
+version: "3"
+services:
+  ehbot:
+    image: ghcr.io/qini7-sese/ehbot:latest
+    container_name: ehbot
+    restart: always
+    network_mode: "host"
+    environment:
+      CONFIG_FILE: "/config.yaml"
+      TZ: Asia/Shanghai
+    volumes:
+      - "./config.yaml:/config.yaml:ro"
+    logging:
+      driver: journald

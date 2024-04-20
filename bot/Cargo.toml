@@ -1,0 +1,49 @@
+[package]
+edition = "2021"
+name = "bot"
+version = "0.1.17"
+
+[dependencies]
+eh2telegraph = { path = "../eh2telegraph" }
+
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+dptree = "0.3"
+once_cell = "1"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "multipart",
+    "rustls-tls",
+] }
+serde = { version = "1", features = ["derive"] }
+singleflight-async = { version = "0.1", features = ["hardware-lock-elision"] }
+teloxide = { version = "0.12", features = [
+    "macros",
+    "ctrlc_handler",
+    "auto-send",
+] }
+time = { version = "0.3.34", features = ["local-offset", "std", "macros"] }
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "sync",
+    "time",
+    "parking_lot",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [
+    "local-time",
+    "parking_lot",
+    "time",
+    "env-filter",
+] }
+
+[build-dependencies]
+vergen = { version = "8", default_features = false, features = [
+    "build",
+    "cargo",
+    "rustc",
+] }
