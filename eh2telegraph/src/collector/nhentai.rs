@@ -160,7 +160,7 @@ impl Collector for NHCollector {
             .and_then(Response::error_for_status)?
             .json()
             .await?;
-        let title = album.title.title(|| format!("Nhentai-{album_id}"));
+        let title = album.title.title(|| format!("nhentai-{album_id}"));
         let image_urls = album
             .images
             .pages
