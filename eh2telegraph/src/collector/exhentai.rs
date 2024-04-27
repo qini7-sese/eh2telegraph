@@ -1,16 +1,16 @@
 use std::time::Duration;
 
 use again::RetryPolicy;
+use ipnet::Ipv6Net;
 use regex::Regex;
-use reqwest::header;
+use reqwest::header::{self, HeaderMap};
 use serde::Deserialize;
 
 use crate::{
     config,
-    http_proxy::ProxiedClient,
+    http_client::{GhostClient, GhostClientBuilder},
     stream::AsyncStream,
-    util::match_first_group,
-    util::{get_bytes, get_string},
+    util::{get_bytes, get_string, match_first_group},
 };
 
 use super::{
@@ -32,8 +32,8 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct EXCollector {
-    proxy_client: ProxiedClient,
-    client: reqwest::Client,
+    ghost_client: GhostClient,
+    raw_client: reqwest::Client,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,40 +43,49 @@ pub struct ExConfig {
     pub igneous: String,
 }
 
-impl EXCollector {
-    pub fn new(config: &ExConfig, proxy_client: ProxiedClient) -> anyhow::Result<Self> {
+impl ExConfig {
+    fn build_header(&self) -> HeaderMap {
         let cookie_value = format!(
             "ipb_pass_hash={};ipb_member_id={};igneous={};nw=1",
-            config.ipb_pass_hash, config.ipb_member_id, config.igneous
+            self.ipb_pass_hash, self.ipb_member_id, self.igneous
         );
 
         // set headers with exhentai cookies
         let mut request_headers = header::HeaderMap::new();
         request_headers.insert(
             header::COOKIE,
-            header::HeaderValue::from_str(&cookie_value)?,
+            header::HeaderValue::from_str(&cookie_value)
+                .expect("invalid ExConfig settings, unable to build header map"),
         );
+        request_headers
+    }
+}
+
+impl EXCollector {
+    pub fn new(config: &ExConfig, prefix: Option<Ipv6Net>) -> anyhow::Result<Self> {
         Ok(Self {
-            client: {
-                reqwest::Client::builder()
-                    .default_headers(request_headers.clone())
-                    .timeout(TIMEOUT)
-                    .build()
-                    .expect("build reqwest client failed")
-            },
-            proxy_client: proxy_client.with_default_headers(request_headers),
+            ghost_client: GhostClientBuilder::default()
+                .with_default_headers(config.build_header())
+                .with_cf_resolve(&["exhentai.org"])
+                .build(prefix),
+            raw_client: reqwest::Client::builder().timeout(TIMEOUT).build().unwrap(),
         })
     }
 
     pub fn new_from_config() -> anyhow::Result<Self> {
         let config: ExConfig = config::parse(CONFIG_KEY)?
             .ok_or_else(|| anyhow::anyhow!("exhentai config(key: exhentai) not found"))?;
-        let proxy_client = ProxiedClient::new_from_config();
-        Self::new(&config, proxy_client)
+        Ok(Self {
+            ghost_client: GhostClientBuilder::default()
+                .with_default_headers(config.build_header())
+                .with_cf_resolve(&["exhentai.org"])
+                .build_from_config()?,
+            raw_client: reqwest::Client::builder().timeout(TIMEOUT).build().unwrap(),
+        })
     }
 
     pub fn get_client(&self) -> reqwest::Client {
-        self.client.clone()
+        self.raw_client.clone()
     }
 }
 
@@ -87,7 +96,7 @@ impl Collector for EXCollector {
 
     #[inline]
     fn name() -> &'static str {
-        "exhentai"
+        "e-hentai"
     }
 
     async fn fetch(
@@ -109,7 +118,7 @@ impl Collector for EXCollector {
         tracing::info!("[exhentai] process {url}");
 
         let mut paged = Paged::new(0, EXPageIndicator { base: url.clone() });
-        let gallery_pages = paged.pages(&self.proxy_client).await.map_err(|e| {
+        let gallery_pages = paged.pages(&self.ghost_client).await.map_err(|e| {
             tracing::error!("[exhentai] load page failed: {e:?}");
             e
         })?;
@@ -117,8 +126,8 @@ impl Collector for EXCollector {
 
         // Since paged returns at least one page, we can safely get it.
         let title = match_first_group(&TITLE_RE, &gallery_pages[0])
-            .unwrap_or("No Title")
-            .to_string();
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("exhentai-{album_id}"));
 
         let mut image_page_links = Vec::new();
         for gallery_page in gallery_pages.iter() {
@@ -144,8 +153,8 @@ impl Collector for EXCollector {
                 tags: None,
             },
             EXImageStream {
-                client: self.client.clone(),
-                proxy_client: self.proxy_client.clone(),
+                raw_client: self.raw_client.clone(),
+                ghost_client: self.ghost_client.clone(),
                 image_page_links: image_page_links.into_iter(),
             },
         ))
@@ -154,24 +163,24 @@ impl Collector for EXCollector {
 
 #[derive(Debug)]
 pub struct EXImageStream {
-    client: reqwest::Client,
-    proxy_client: ProxiedClient,
+    raw_client: reqwest::Client,
+    ghost_client: GhostClient,
     image_page_links: std::vec::IntoIter<String>,
 }
 
 impl EXImageStream {
     async fn load_image(
-        proxy_client: ProxiedClient,
-        client: reqwest::Client,
+        ghost_client: GhostClient,
+        raw_client: reqwest::Client,
         link: String,
     ) -> anyhow::Result<(ImageMeta, ImageData)> {
         let content = RETRY_POLICY
-            .retry(|| async { get_string(&proxy_client, &link).await })
+            .retry(|| async { get_string(&ghost_client, &link).await })
             .await?;
         let img_url = match_first_group(&IMG_RE, &content)
             .ok_or_else(|| anyhow::anyhow!("unable to find image in page"))?;
         let image_data = RETRY_POLICY
-            .retry(|| async { get_bytes(&client, img_url).await })
+            .retry(|| async { get_bytes(&raw_client, img_url).await })
             .await?;
 
         tracing::trace!(
@@ -194,9 +203,9 @@ impl AsyncStream for EXImageStream {
 
     fn next(&mut self) -> Option<Self::Future> {
         let link = self.image_page_links.next()?;
-        let client = self.client.clone();
-        let proxy_client = self.proxy_client.clone();
-        Some(async move { Self::load_image(proxy_client, client, link).await })
+        let ghost_client = self.ghost_client.clone();
+        let raw_client = self.raw_client.clone();
+        Some(async move { Self::load_image(ghost_client, raw_client, link).await })
     }
 
     #[inline]
@@ -238,7 +247,7 @@ mod tests {
             igneous: "balabala".to_string(),
         };
         println!("config {config:#?}");
-        let collector = EXCollector::new(&config, ProxiedClient::default()).unwrap();
+        let collector = EXCollector::new(&config, None).unwrap();
         let (album, mut image_stream) = collector
             .fetch("/g/2129939/01a6e086b9".to_string())
             .await
@@ -261,7 +270,7 @@ mod tests {
             igneous: "balabala".to_string(),
         };
         println!("config {config:#?}");
-        let collector = EXCollector::new(&config, ProxiedClient::default()).unwrap();
+        let collector = EXCollector::new(&config, None).unwrap();
         let output = collector.fetch("/g/2129939/00000".to_string()).await;
         assert!(output.is_err());
         println!("output err {output:?}");

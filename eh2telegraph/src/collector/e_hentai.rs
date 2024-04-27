@@ -104,8 +104,8 @@ impl Collector for EHCollector {
 
         // Since paged returns at least one page, we can safely get it.
         let title = match_first_group(&TITLE_RE, &gallery_pages[0])
-            .unwrap_or("No Title")
-            .to_string();
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("e-hentai-{album_id}"));
 
         let mut image_page_links = Vec::new();
         for gallery_page in gallery_pages.iter() {
