@@ -92,7 +92,9 @@ where
         <C::ImageStream as AsyncStream>::Future: Send + 'static,
     {
         // check cache
-        let cache_key = format!("{}|{}", C::name(), path);
+        let path = path.trim_end_matches('/').to_string();
+        let original_cache_key = format!("{}|{}", C::name(), path);
+        let cache_key = original_cache_key.replace("exhentai", "e-hentai");
         if let Ok(Some(v)) = self.cache.get(&cache_key).await {
             tracing::info!("[cache] hit key {cache_key}");
             return Ok(v);
